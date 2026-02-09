@@ -11,6 +11,9 @@ UNATTENDED=0
 CLAUDE_DIR="$HOME/.claude"
 BATCHES_DIR="$CLAUDE_DIR/batches"
 RESULTS_DIR="$BATCHES_DIR/results"
+CLAUDE_JSON="$HOME/.claude.json"
+SETTINGS_FILE="$CLAUDE_DIR/settings.json"
+ENV_FILE="$CLAUDE_DIR/env"
 
 # ─── Color helpers ──────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -18,7 +21,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 info()  { echo -e "${CYAN}[info]${NC}  $*"; }
 ok()    { echo -e "${GREEN}[ok]${NC}    $*"; }
@@ -30,6 +33,7 @@ die()   { err "$@"; exit 1; }
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --api-key)
+            [[ $# -ge 2 ]] || die "--api-key requires an argument"
             API_KEY="$2"
             shift 2
             ;;
@@ -60,17 +64,18 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# ─── Resolve API key ───────────────────────────────────────────────────────────
+# ─── Resolve API key (without sourcing arbitrary files) ─────────────────────────
 if [[ -z "$API_KEY" ]]; then
-    # Try environment
     API_KEY="${ANTHROPIC_API_KEY:-}"
 fi
 
 if [[ -z "$API_KEY" ]]; then
-    # Try existing env file
-    if [[ -f "$CLAUDE_DIR/env" ]]; then
-        source "$CLAUDE_DIR/env" 2>/dev/null || true
-        API_KEY="${ANTHROPIC_API_KEY:-}"
+    # Try parsing (not sourcing) existing env file
+    if [[ -f "$ENV_FILE" ]]; then
+        API_KEY="$(grep -m1 '^export ANTHROPIC_API_KEY=' "$ENV_FILE" 2>/dev/null \
+                   | sed 's/^export ANTHROPIC_API_KEY=//' \
+                   | sed 's/^"//;s/"$//' \
+                   | sed "s/^'//;s/'$//" )" || true
     fi
 fi
 
@@ -81,9 +86,7 @@ if [[ -z "$API_KEY" ]]; then
     echo -e "${BOLD}Enter your Anthropic API key:${NC}"
     read -r -s API_KEY
     echo ""
-    if [[ -z "$API_KEY" ]]; then
-        die "No API key provided."
-    fi
+    [[ -n "$API_KEY" ]] || die "No API key provided."
 fi
 
 # ─── Determine script directory (where source files are) ───────────────────────
@@ -96,18 +99,9 @@ echo "────────────────────────�
 echo ""
 
 MISSING_DEPS=()
-
-if ! command -v uv &>/dev/null; then
-    MISSING_DEPS+=("uv")
-fi
-
-if ! command -v jq &>/dev/null; then
-    MISSING_DEPS+=("jq")
-fi
-
-if ! command -v curl &>/dev/null; then
-    MISSING_DEPS+=("curl")
-fi
+command -v uv   &>/dev/null || MISSING_DEPS+=("uv")
+command -v jq   &>/dev/null || MISSING_DEPS+=("jq")
+command -v curl &>/dev/null || MISSING_DEPS+=("curl")
 
 if [[ ${#MISSING_DEPS[@]} -gt 0 ]]; then
     err "Missing required dependencies: ${MISSING_DEPS[*]}"
@@ -125,49 +119,164 @@ fi
 
 ok "Dependencies found: uv, jq, curl"
 
+# Verify source files exist before planning anything
+for src_file in "mcp/claude_batch_mcp.py" "skills/batch/SKILL.md" "statusline.sh"; do
+    [[ -f "$SCRIPT_DIR/$src_file" ]] || die "Source file not found: $SCRIPT_DIR/$src_file"
+done
+
+# ─── Build change manifest ─────────────────────────────────────────────────────
+echo ""
+echo -e "${BOLD}Planned changes:${NC}"
+echo ""
+
+CHANGES=()
+WARNINGS=()
+
+# 1. Directories
+for d in "$CLAUDE_DIR/mcp" "$CLAUDE_DIR/skills/batch" "$RESULTS_DIR"; do
+    if [[ ! -d "$d" ]]; then
+        CHANGES+=("CREATE DIR  $d")
+    fi
+done
+
+# 2. File copies
+for pair in \
+    "mcp/claude_batch_mcp.py:$CLAUDE_DIR/mcp/claude_batch_mcp.py" \
+    "skills/batch/SKILL.md:$CLAUDE_DIR/skills/batch/SKILL.md" \
+    "statusline.sh:$CLAUDE_DIR/statusline.sh"; do
+    src="${pair%%:*}"
+    dst="${pair##*:}"
+    if [[ -f "$dst" ]]; then
+        CHANGES+=("OVERWRITE   $dst  (from $src)")
+    else
+        CHANGES+=("COPY        $src → $dst")
+    fi
+done
+
+# 3. Env file
+if [[ -f "$ENV_FILE" ]]; then
+    if grep -q '^export ANTHROPIC_API_KEY=' "$ENV_FILE" 2>/dev/null; then
+        CHANGES+=("UPDATE      $ENV_FILE  (replace ANTHROPIC_API_KEY line)")
+    else
+        CHANGES+=("APPEND      $ENV_FILE  (add ANTHROPIC_API_KEY)")
+    fi
+else
+    CHANGES+=("CREATE      $ENV_FILE  (with ANTHROPIC_API_KEY)")
+fi
+
+# 4. claude.json MCP entry
+if [[ -f "$CLAUDE_JSON" ]]; then
+    CHANGES+=("BACKUP      $CLAUDE_JSON → ${CLAUDE_JSON}.bak")
+    if jq -e '.mcpServers["claude-batch"]' "$CLAUDE_JSON" &>/dev/null; then
+        CHANGES+=("UPDATE      $CLAUDE_JSON  (replace mcpServers.claude-batch)")
+    else
+        CHANGES+=("MERGE       $CLAUDE_JSON  (add mcpServers.claude-batch)")
+    fi
+else
+    CHANGES+=("CREATE      $CLAUDE_JSON  (with mcpServers.claude-batch)")
+fi
+
+# 5. Status line
+SKIP_STATUSLINE=0
+if [[ "$NO_POLLER" -eq 0 ]]; then
+    STATUS_CMD="bash $CLAUDE_DIR/statusline.sh"
+    if [[ -f "$SETTINGS_FILE" ]]; then
+        EXISTING_STATUS_CMD="$(jq -r '.statusLine.command // empty' "$SETTINGS_FILE" 2>/dev/null || true)"
+        if [[ -n "$EXISTING_STATUS_CMD" && "$EXISTING_STATUS_CMD" != "$STATUS_CMD" ]]; then
+            WARNINGS+=("statusLine is already set to: $EXISTING_STATUS_CMD")
+            WARNINGS+=("It does NOT point to our script. Will NOT overwrite.")
+            SKIP_STATUSLINE=1
+        else
+            CHANGES+=("BACKUP      $SETTINGS_FILE → ${SETTINGS_FILE}.bak")
+            if [[ "$EXISTING_STATUS_CMD" == "$STATUS_CMD" ]]; then
+                CHANGES+=("NO CHANGE   $SETTINGS_FILE  (statusLine already set to our script)")
+            else
+                CHANGES+=("MERGE       $SETTINGS_FILE  (set statusLine)")
+            fi
+        fi
+    else
+        CHANGES+=("CREATE      $SETTINGS_FILE  (with statusLine)")
+    fi
+else
+    CHANGES+=("SKIP        statusLine configuration (--no-poller)")
+fi
+
+# 6. jobs.json
+JOBS_FILE="$BATCHES_DIR/jobs.json"
+if [[ ! -f "$JOBS_FILE" ]]; then
+    CHANGES+=("CREATE      $JOBS_FILE  (empty job registry)")
+else
+    CHANGES+=("NO CHANGE   $JOBS_FILE  (already exists)")
+fi
+
+# Print the manifest
+for change in "${CHANGES[@]}"; do
+    echo -e "  ${CYAN}•${NC} $change"
+done
+
+if [[ ${#WARNINGS[@]} -gt 0 ]]; then
+    echo ""
+    for w in "${WARNINGS[@]}"; do
+        warn "$w"
+    done
+fi
+
+echo ""
+
+# ─── Confirm with user ─────────────────────────────────────────────────────────
+if [[ "$UNATTENDED" -eq 0 ]]; then
+    echo -e -n "${BOLD}Proceed with installation? [Y/n]${NC} "
+    read -r CONFIRM
+    case "${CONFIRM:-Y}" in
+        [Yy]|[Yy]es|"") ;;
+        *) echo "Aborted."; exit 0 ;;
+    esac
+    echo ""
+fi
+
+# ─── Helper: atomic JSON write ─────────────────────────────────────────────────
+# Usage: atomic_json_write <json_string> <target_file>
+# Validates JSON, writes to temp, then atomically moves into place.
+atomic_json_write() {
+    local json_content="$1"
+    local target="$2"
+    local tmpfile="${target}.install_tmp.$$"
+
+    # Validate & pretty-print
+    if ! echo "$json_content" | jq '.' > "$tmpfile" 2>/dev/null; then
+        rm -f "$tmpfile"
+        die "BUG: Generated invalid JSON for $target. Aborting (no changes made to this file)."
+    fi
+
+    mv -f "$tmpfile" "$target"
+}
+
 # ─── Create directory structure ─────────────────────────────────────────────────
 mkdir -p "$CLAUDE_DIR/mcp"
 mkdir -p "$CLAUDE_DIR/skills/batch"
 mkdir -p "$RESULTS_DIR"
 
-ok "Directory structure created"
+ok "Directory structure ready"
 
 # ─── Copy files ─────────────────────────────────────────────────────────────────
+cp "$SCRIPT_DIR/mcp/claude_batch_mcp.py" "$CLAUDE_DIR/mcp/claude_batch_mcp.py"
+ok "Installed mcp/claude_batch_mcp.py"
 
-# MCP server
-if [[ -f "$SCRIPT_DIR/mcp/claude_batch_mcp.py" ]]; then
-    cp "$SCRIPT_DIR/mcp/claude_batch_mcp.py" "$CLAUDE_DIR/mcp/claude_batch_mcp.py"
-    ok "Copied mcp/claude_batch_mcp.py"
-else
-    die "Source file not found: $SCRIPT_DIR/mcp/claude_batch_mcp.py"
-fi
+cp "$SCRIPT_DIR/skills/batch/SKILL.md" "$CLAUDE_DIR/skills/batch/SKILL.md"
+ok "Installed skills/batch/SKILL.md"
 
-# Skill
-if [[ -f "$SCRIPT_DIR/skills/batch/SKILL.md" ]]; then
-    cp "$SCRIPT_DIR/skills/batch/SKILL.md" "$CLAUDE_DIR/skills/batch/SKILL.md"
-    ok "Copied skills/batch/SKILL.md"
-else
-    die "Source file not found: $SCRIPT_DIR/skills/batch/SKILL.md"
-fi
-
-# Status line
-if [[ -f "$SCRIPT_DIR/statusline.sh" ]]; then
-    cp "$SCRIPT_DIR/statusline.sh" "$CLAUDE_DIR/statusline.sh"
-    chmod +x "$CLAUDE_DIR/statusline.sh"
-    ok "Copied statusline.sh"
-else
-    die "Source file not found: $SCRIPT_DIR/statusline.sh"
-fi
+cp "$SCRIPT_DIR/statusline.sh" "$CLAUDE_DIR/statusline.sh"
+chmod +x "$CLAUDE_DIR/statusline.sh"
+ok "Installed statusline.sh"
 
 # ─── Write API key to ~/.claude/env ────────────────────────────────────────────
-ENV_FILE="$CLAUDE_DIR/env"
-
-# Preserve existing env vars, update ANTHROPIC_API_KEY
 if [[ -f "$ENV_FILE" ]]; then
-    # Remove existing ANTHROPIC_API_KEY line(s) if present
-    grep -v '^export ANTHROPIC_API_KEY=' "$ENV_FILE" > "$ENV_FILE.tmp" 2>/dev/null || true
-    echo "export ANTHROPIC_API_KEY=\"$API_KEY\"" >> "$ENV_FILE.tmp"
-    mv "$ENV_FILE.tmp" "$ENV_FILE"
+    # Build new content: everything except existing ANTHROPIC_API_KEY lines, then append ours
+    {
+        grep -v '^export ANTHROPIC_API_KEY=' "$ENV_FILE" 2>/dev/null || true
+        echo "export ANTHROPIC_API_KEY=\"$API_KEY\""
+    } > "${ENV_FILE}.install_tmp.$$"
+    mv -f "${ENV_FILE}.install_tmp.$$" "$ENV_FILE"
 else
     echo "export ANTHROPIC_API_KEY=\"$API_KEY\"" > "$ENV_FILE"
 fi
@@ -175,65 +284,79 @@ fi
 chmod 600 "$ENV_FILE"
 ok "API key written to ~/.claude/env (mode 600)"
 
-# ─── Register MCP server in ~/.claude.json ──────────────────────────────────────
-CLAUDE_JSON="$HOME/.claude.json"
-
-# Build the MCP server entry we want
-MCP_ENTRY=$(cat <<MCPEOF
-{
-  "command": "uv",
-  "args": ["run", "$CLAUDE_DIR/mcp/claude_batch_mcp.py", "--mcp"],
-  "env": {
-    "ANTHROPIC_API_KEY": "$API_KEY"
-  }
-}
-MCPEOF
-)
+# ─── Register MCP server in ~/.claude.json (safe merge with jq --arg) ──────────
+# Build MCP entry using jq --arg for safe value escaping
+MCP_ENTRY=$(jq -n \
+    --arg mcp_script "$CLAUDE_DIR/mcp/claude_batch_mcp.py" \
+    --arg api_key "$API_KEY" \
+    '{
+        "command": "uv",
+        "args": ["run", $mcp_script, "--mcp"],
+        "env": {
+            "ANTHROPIC_API_KEY": $api_key
+        }
+    }')
 
 if [[ -f "$CLAUDE_JSON" ]]; then
-    # File exists — merge in our MCP server
+    # Backup before modifying
+    cp -p "$CLAUDE_JSON" "${CLAUDE_JSON}.bak"
+    info "Backed up ${CLAUDE_JSON} → ${CLAUDE_JSON}.bak"
+
     EXISTING=$(cat "$CLAUDE_JSON")
 
-    # Check if mcpServers key exists
+    # Validate existing file is valid JSON
+    if ! echo "$EXISTING" | jq '.' &>/dev/null; then
+        die "$CLAUDE_JSON is not valid JSON. Please fix it manually before installing."
+    fi
+
     if echo "$EXISTING" | jq -e '.mcpServers' &>/dev/null; then
-        # Update/add our server entry
         UPDATED=$(echo "$EXISTING" | jq --argjson entry "$MCP_ENTRY" '.mcpServers["claude-batch"] = $entry')
     else
-        # Add mcpServers key
         UPDATED=$(echo "$EXISTING" | jq --argjson entry "$MCP_ENTRY" '. + {"mcpServers": {"claude-batch": $entry}}')
     fi
 
-    echo "$UPDATED" | jq '.' > "$CLAUDE_JSON"
+    atomic_json_write "$UPDATED" "$CLAUDE_JSON"
 else
-    # Create new file
-    jq -n --argjson entry "$MCP_ENTRY" '{"mcpServers": {"claude-batch": $entry}}' > "$CLAUDE_JSON"
+    NEW_JSON=$(jq -n --argjson entry "$MCP_ENTRY" '{"mcpServers": {"claude-batch": $entry}}')
+    atomic_json_write "$NEW_JSON" "$CLAUDE_JSON"
 fi
 
 ok "MCP server registered in ~/.claude.json"
 
 # ─── Configure statusLine in ~/.claude/settings.json ────────────────────────────
-if [[ "$NO_POLLER" -eq 0 ]]; then
-    SETTINGS_FILE="$CLAUDE_DIR/settings.json"
+if [[ "$NO_POLLER" -eq 0 && "$SKIP_STATUSLINE" -eq 0 ]]; then
     STATUS_CMD="bash $CLAUDE_DIR/statusline.sh"
     STATUS_OBJ=$(jq -n --arg cmd "$STATUS_CMD" '{"type": "command", "command": $cmd}')
 
     if [[ -f "$SETTINGS_FILE" ]]; then
+        # Backup before modifying
+        cp -p "$SETTINGS_FILE" "${SETTINGS_FILE}.bak"
+        info "Backed up ${SETTINGS_FILE} → ${SETTINGS_FILE}.bak"
+
         EXISTING_SETTINGS=$(cat "$SETTINGS_FILE")
+
+        # Validate existing file
+        if ! echo "$EXISTING_SETTINGS" | jq '.' &>/dev/null; then
+            die "$SETTINGS_FILE is not valid JSON. Please fix it manually before installing."
+        fi
+
         UPDATED_SETTINGS=$(echo "$EXISTING_SETTINGS" | jq --argjson obj "$STATUS_OBJ" '.statusLine = $obj')
-        echo "$UPDATED_SETTINGS" | jq '.' > "$SETTINGS_FILE"
+        atomic_json_write "$UPDATED_SETTINGS" "$SETTINGS_FILE"
     else
-        jq -n --argjson obj "$STATUS_OBJ" '{"statusLine": $obj}' > "$SETTINGS_FILE"
+        NEW_SETTINGS=$(jq -n --argjson obj "$STATUS_OBJ" '{"statusLine": $obj}')
+        atomic_json_write "$NEW_SETTINGS" "$SETTINGS_FILE"
     fi
 
     ok "Status line configured in ~/.claude/settings.json"
+elif [[ "$SKIP_STATUSLINE" -eq 1 ]]; then
+    warn "Skipped statusLine — already set to a different command (not overwritten)"
 else
     warn "Skipping status line configuration (--no-poller)"
 fi
 
 # ─── Initialize jobs.json if missing ───────────────────────────────────────────
-JOBS_FILE="$BATCHES_DIR/jobs.json"
 if [[ ! -f "$JOBS_FILE" ]]; then
-    echo '{"version": 1, "jobs": {}}' | jq '.' > "$JOBS_FILE"
+    atomic_json_write '{"version": 1, "jobs": {}}' "$JOBS_FILE"
     ok "Initialized jobs.json"
 else
     ok "jobs.json already exists"
@@ -241,14 +364,13 @@ fi
 
 # ─── Smoke test ─────────────────────────────────────────────────────────────────
 echo ""
-info "Running smoke test..."
+info "Running smoke test (this may take a moment if uv needs to resolve dependencies)..."
 
 export ANTHROPIC_API_KEY="$API_KEY"
 
 if uv run "$CLAUDE_DIR/mcp/claude_batch_mcp.py" list --base-dir "$BATCHES_DIR" &>/dev/null; then
     ok "Smoke test passed — MCP server works"
 else
-    # Try with more verbose output
     warn "Smoke test had issues. Attempting with output:"
     if uv run "$CLAUDE_DIR/mcp/claude_batch_mcp.py" list --base-dir "$BATCHES_DIR" 2>&1; then
         ok "Smoke test passed (with warnings)"
@@ -277,4 +399,3 @@ echo "  /batch list"
 echo ""
 echo "The status bar will show batch job counts automatically."
 echo ""
-

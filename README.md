@@ -4,19 +4,15 @@ Send non-urgent work to the Anthropic Batch API at **50% cost** — directly fro
 
 Code reviews, documentation, architecture analysis, refactoring plans, security audits — anything that can wait ~1 hour gets half-price processing with Claude Opus.
 
-## Quick Install
+## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/your-org/claude-batch-toolkit/main/install.sh | bash -s -- --api-key sk-ant-...
-```
-
-Or clone and run locally:
-
-```bash
-git clone https://github.com/your-org/claude-batch-toolkit.git
+git clone git@github.com:s2-streamstore/claude-batch-toolkit.git
 cd claude-batch-toolkit
 ./install.sh --api-key sk-ant-your-key-here
 ```
+
+The installer shows a manifest of every change it will make and asks for confirmation before proceeding.
 
 ### Install Options
 
@@ -25,6 +21,234 @@ cd claude-batch-toolkit
 | `--api-key KEY` | Your Anthropic API key (required unless already in env) |
 | `--no-poller` | Skip status line configuration |
 | `--unattended` | No interactive prompts |
+
+### Uninstall
+
+```bash
+./uninstall.sh
+```
+
+This shows what will be removed, asks for confirmation, and preserves your results in `~/.claude/batches/results/`. Use `--purge-data` to also remove results.
+
+<details>
+<summary><strong>Manual Installation (no script)</strong></summary>
+
+If you prefer not to run the install script — or need to install in a restricted environment — follow these steps to set up each component by hand.
+
+#### Prerequisites
+
+| Dependency | Purpose | Install |
+|------------|---------|---------|
+| **uv** | Runs the Python MCP server (no virtualenv needed) | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
+| **jq** | JSON processing in statusline + installer | `brew install jq` or `apt-get install jq` |
+| **curl** | Polls the Anthropic API from statusline | `brew install curl` or `apt-get install curl` |
+
+You also need an **Anthropic API key** (`sk-ant-...`). Get one from [console.anthropic.com](https://console.anthropic.com/).
+
+Verify prerequisites:
+
+```bash
+command -v uv   && echo "uv ok"   || echo "uv MISSING"
+command -v jq   && echo "jq ok"   || echo "jq MISSING"
+command -v curl && echo "curl ok" || echo "curl MISSING"
+```
+
+#### Step 1: Create directory structure
+
+```bash
+mkdir -p ~/.claude/mcp
+mkdir -p ~/.claude/skills/batch
+mkdir -p ~/.claude/batches/results
+```
+
+#### Step 2: Install the MCP server
+
+```bash
+cp mcp/claude_batch_mcp.py ~/.claude/mcp/claude_batch_mcp.py
+```
+
+#### Step 3: Install the skill file
+
+```bash
+cp skills/batch/SKILL.md ~/.claude/skills/batch/SKILL.md
+```
+
+#### Step 4 *(optional)*: Install the statusline script
+
+> Skip this step if you don't want batch job counts in your Claude Code status bar. Everything else works without it.
+
+```bash
+cp statusline.sh ~/.claude/statusline.sh
+chmod +x ~/.claude/statusline.sh
+```
+
+#### Step 5: Set up your API key
+
+The toolkit reads `ANTHROPIC_API_KEY` from `~/.claude/env`. This file **must** be mode `600`.
+
+**If `~/.claude/env` does not exist yet:**
+
+```bash
+echo 'export ANTHROPIC_API_KEY="sk-ant-YOUR-KEY-HERE"' > ~/.claude/env
+chmod 600 ~/.claude/env
+```
+
+**If `~/.claude/env` already exists**, open it in your editor and add (or replace) the `ANTHROPIC_API_KEY` line, then ensure `chmod 600 ~/.claude/env`.
+
+#### Step 6: Register the MCP server in `~/.claude.json`
+
+Claude Code discovers MCP servers through `~/.claude.json`. You need to add a `claude-batch` entry under the `mcpServers` key.
+
+**If `~/.claude.json` does not exist yet:**
+
+```bash
+API_KEY=$(grep ANTHROPIC_API_KEY ~/.claude/env | cut -d'"' -f2)
+
+jq -n --arg home "$HOME" --arg key "$API_KEY" '{
+  "mcpServers": {
+    "claude-batch": {
+      "command": "uv",
+      "args": ["run", ($home + "/.claude/mcp/claude_batch_mcp.py"), "--mcp"],
+      "env": { "ANTHROPIC_API_KEY": $key }
+    }
+  }
+}' > ~/.claude.json
+```
+
+**If `~/.claude.json` already exists** — merge (don't overwrite):
+
+```bash
+API_KEY=$(grep ANTHROPIC_API_KEY ~/.claude/env | cut -d'"' -f2)
+
+jq --arg home "$HOME" --arg key "$API_KEY" '
+  .mcpServers["claude-batch"] = {
+    "command": "uv",
+    "args": ["run", ($home + "/.claude/mcp/claude_batch_mcp.py"), "--mcp"],
+    "env": { "ANTHROPIC_API_KEY": $key }
+  }
+' ~/.claude.json > ~/.claude.json.tmp && mv ~/.claude.json.tmp ~/.claude.json
+```
+
+Or edit by hand — the path in `args` must be an **absolute path** (use `echo $HOME` to get yours).
+
+#### Step 7 *(optional)*: Configure the statusline in `~/.claude/settings.json`
+
+> Skip this if you skipped Step 4. The statusLine value **must** be an object, not a bare string.
+
+**If `~/.claude/settings.json` does not exist yet:**
+
+```bash
+jq -n --arg cmd "bash $HOME/.claude/statusline.sh" '{
+  "statusLine": {"type": "command", "command": $cmd}
+}' > ~/.claude/settings.json
+```
+
+**If it already exists:**
+
+```bash
+jq --arg cmd "bash $HOME/.claude/statusline.sh" '
+  .statusLine = {"type": "command", "command": $cmd}
+' ~/.claude/settings.json > ~/.claude/settings.json.tmp \
+  && mv ~/.claude/settings.json.tmp ~/.claude/settings.json
+```
+
+> **Warning:** This overwrites any existing `statusLine`. If you have a custom statusline, incorporate the batch script manually.
+
+#### Step 8: Initialize the jobs registry
+
+```bash
+if [ ! -f ~/.claude/batches/jobs.json ]; then
+  echo '{"version": 1, "jobs": {}}' | jq '.' > ~/.claude/batches/jobs.json
+  echo "Created jobs.json"
+else
+  echo "jobs.json already exists"
+fi
+```
+
+#### Step 9: Smoke test
+
+```bash
+source ~/.claude/env
+uv run ~/.claude/mcp/claude_batch_mcp.py list --base-dir ~/.claude/batches
+```
+
+Expected: an empty list or JSON showing no jobs. First run may take a moment while `uv` resolves dependencies.
+
+If you installed the statusline:
+
+```bash
+echo '{}' | bash ~/.claude/statusline.sh
+```
+
+#### Verify Installation
+
+```bash
+echo "=== File check ==="
+[ -f ~/.claude/mcp/claude_batch_mcp.py ] && echo "ok MCP server"     || echo "MISSING MCP server"
+[ -f ~/.claude/skills/batch/SKILL.md ]   && echo "ok Skill file"     || echo "MISSING Skill file"
+[ -f ~/.claude/statusline.sh ]           && echo "ok Statusline"     || echo "-- Statusline (optional)"
+[ -f ~/.claude/env ]                     && echo "ok Env file"       || echo "MISSING Env file"
+[ -f ~/.claude/batches/jobs.json ]       && echo "ok Jobs registry"  || echo "MISSING Jobs registry"
+
+echo ""
+echo "=== Config check ==="
+jq -e '.mcpServers["claude-batch"]' ~/.claude.json &>/dev/null \
+  && echo "ok MCP registered in ~/.claude.json" \
+  || echo "MISSING MCP entry in ~/.claude.json"
+
+echo ""
+echo "=== Permissions check ==="
+PERMS=$(stat -f '%A' ~/.claude/env 2>/dev/null || stat -c '%a' ~/.claude/env 2>/dev/null)
+[ "$PERMS" = "600" ] && echo "ok ~/.claude/env is mode 600" || echo "WARN ~/.claude/env is mode $PERMS (should be 600)"
+```
+
+#### Manual Uninstall
+
+**Step 1: Remove toolkit files**
+
+```bash
+rm -f ~/.claude/mcp/claude_batch_mcp.py
+rm -f ~/.claude/skills/batch/SKILL.md
+rm -f ~/.claude/statusline.sh
+rmdir ~/.claude/skills/batch 2>/dev/null || true
+rmdir ~/.claude/skills 2>/dev/null || true
+```
+
+**Step 2: Remove MCP entry from `~/.claude.json`**
+
+```bash
+jq 'del(.mcpServers["claude-batch"])' ~/.claude.json > ~/.claude.json.tmp \
+  && mv ~/.claude.json.tmp ~/.claude.json
+```
+
+**Step 3: Remove statusline from `~/.claude/settings.json`** (if installed)
+
+```bash
+jq 'del(.statusLine)' ~/.claude/settings.json > ~/.claude/settings.json.tmp \
+  && mv ~/.claude/settings.json.tmp ~/.claude/settings.json
+```
+
+**Step 4: Remove API key** (optional)
+
+```bash
+grep -v '^export ANTHROPIC_API_KEY=' ~/.claude/env > ~/.claude/env.tmp \
+  && mv ~/.claude/env.tmp ~/.claude/env && chmod 600 ~/.claude/env
+[ ! -s ~/.claude/env ] && rm -f ~/.claude/env
+```
+
+**Step 5: Remove jobs data** (optional)
+
+```bash
+rm -f ~/.claude/batches/jobs.json
+rm -f ~/.claude/batches/.poll_cache
+rm -f ~/.claude/batches/.poll.lock
+# To also remove all batch results:
+# rm -f ~/.claude/batches/results/*.md ~/.claude/batches/results/*.jsonl ~/.claude/batches/results/*.json
+# rmdir ~/.claude/batches/results 2>/dev/null
+# rmdir ~/.claude/batches 2>/dev/null
+```
+
+</details>
 
 ## Usage
 
@@ -103,7 +327,7 @@ uv run ~/.claude/mcp/claude_batch_mcp.py fetch msgbatch_xxx --print
 │                                                                 │
 │  ┌─────────────────────────────────────────────────────────┐    │
 │  │ Status Bar                                              │    │
-│  │ [Opus] 42% | $1.23 | batch: 1 done ✓                   │    │
+│  │ [Opus] 42% | $1.23 | batch: 1 done                     │    │
 │  └─────────────────────────────────────────────────────────┘    │
 │                                                                 │
 │  User: "/batch check"                                           │
@@ -218,7 +442,7 @@ grep ANTHROPIC_API_KEY ~/.claude/env
 
 ```bash
 # Check statusline config
-cat ~/.claude/settings.json | jq '.statusLine'
+jq '.statusLine' ~/.claude/settings.json
 
 # Test statusline manually
 echo '{}' | bash ~/.claude/statusline.sh
@@ -246,22 +470,6 @@ curl -s -H "x-api-key: $ANTHROPIC_API_KEY" \
 chmod 600 ~/.claude/env
 ```
 
-### Reinstall
-
-```bash
-./install.sh --api-key sk-ant-your-key
-```
-
-The installer is idempotent — safe to run multiple times.
-
-### Uninstall
-
-```bash
-./uninstall.sh
-```
-
-This removes toolkit files but preserves your results in `~/.claude/batches/results/`.
-
 ## Architecture
 
 - **MCP Server** (`claude_batch_mcp.py`): Python script run by `uv`. Exposes `send_to_batch`, `batch_status`, `batch_fetch`, `batch_list`, `batch_poll_once` tools. Also works as a CLI.
@@ -272,4 +480,3 @@ This removes toolkit files but preserves your results in `~/.claude/batches/resu
 ## License
 
 MIT
-
