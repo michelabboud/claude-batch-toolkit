@@ -378,7 +378,7 @@ Assistant message arrives
 | `ANTHROPIC_API_KEY` | — | Your Anthropic API key (required) |
 | `CLAUDE_BATCH_DIR` | `~/.claude/batches` | Where jobs.json and results live |
 | `CLAUDE_MODEL` | `claude-opus-4-6` | Model for batch jobs |
-| `CLAUDE_MAX_TOKENS` | `8192` | Max output tokens |
+| `CLAUDE_MAX_TOKENS` | `32768` | Max output tokens |
 | `CLAUDE_THINKING` | — | Set to `enabled` for extended thinking |
 | `CLAUDE_THINKING_BUDGET` | — | Token budget for thinking |
 

@@ -32,7 +32,7 @@ Optional:
   VERTEX_GCS_PREFIX=claude-batch     # default folder prefix in the bucket
   CLAUDE_BATCH_DIR=~/.claude/batches # override local state dir
   CLAUDE_MODEL=claude-opus-4-6       # default model name (both backends use same model string)
-  CLAUDE_MAX_TOKENS=8192             # default max_tokens
+  CLAUDE_MAX_TOKENS=32768            # default max_tokens
   CLAUDE_THINKING=enabled            # passed through to Anthropic Messages schema where supported
   CLAUDE_THINKING_BUDGET=4096        # optional; depends on model/features
   ANTHROPIC_VERSION=2023-06-01       # default header for Anthropic REST
@@ -66,7 +66,7 @@ RESULTS_DIRNAME = "results"
 JOBS_FILENAME = "jobs.json"
 
 DEFAULT_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-4-6")
-DEFAULT_MAX_TOKENS = int(os.getenv("CLAUDE_MAX_TOKENS", "8192"))
+DEFAULT_MAX_TOKENS = int(os.getenv("CLAUDE_MAX_TOKENS", "32768"))
 DEFAULT_ANTHROPIC_VERSION = os.getenv("ANTHROPIC_VERSION", "2023-06-01")
 
 ANTHROPIC_API_BASE = "https://api.anthropic.com"
