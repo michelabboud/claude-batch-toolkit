@@ -26,7 +26,12 @@ For any non-trivial prompt (which is almost all batch work), **assemble the prom
 
 ### Step-by-step process
 
-1. **Gather context** — Read all files, diffs, or code the task needs. The batch model has NO access to the codebase or conversation history. The prompt must be completely self-contained.
+1. **Gather context** — The batch model has NO access to the codebase or conversation history. The prompt must be completely self-contained.
+
+   **IMPORTANT: Don't waste tokens reading files!**
+   - If the user says "upload this file" or "include these files", use `cat` directly in bash to append them to the batch prompt
+   - Only use Read tool if you need to understand the code to craft the prompt (e.g., to write targeted questions)
+   - When including entire files/modules for batch review, use bash `cat` without reading them first
 
 2. **Write the prompt to a temp file using bash**:
 
@@ -41,7 +46,7 @@ Review the following code for security vulnerabilities, focusing on injection at
 ## Code
 PROMPT_EOF
 
-# Append source files
+# Append source files directly with cat (DON'T use Read tool first!)
 echo '### src/auth/login.ts' >> /tmp/batch_prompt.md
 echo '```typescript' >> /tmp/batch_prompt.md
 cat src/auth/login.ts >> /tmp/batch_prompt.md
