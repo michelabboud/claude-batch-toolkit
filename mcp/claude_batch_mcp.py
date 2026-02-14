@@ -739,24 +739,35 @@ def maybe_run_mcp(base_dir: str) -> None:
     @mcp.tool()
     def batch_status(job_id: str) -> Dict[str, Any]:
         rec = get_job(job_id, base_dir)
-        return status_job(rec)
+        result = status_job(rec)
+        result.pop("raw", None)  # Drop verbose API blob to save tokens
+        return result
 
     @mcp.tool()
     def batch_fetch(job_id: str, force: bool = False) -> Dict[str, Any]:
         rec = get_job(job_id, base_dir)
         txt = fetch_job(rec, base_dir, force=force)
-        return {"job_id": rec.job_id, "result_path": rec.result_path, "text": txt}
+        # Truncate to save tokens — full result is on disk at result_path
+        max_chars = 16000
+        truncated = len(txt) > max_chars
+        return {
+            "job_id": rec.job_id,
+            "result_path": rec.result_path,
+            "text": txt[:max_chars] + f"\n\n[TRUNCATED — full result at {rec.result_path}]" if truncated else txt,
+        }
 
     @mcp.tool()
-    def batch_list(state: str = "all") -> List[Dict[str, Any]]:
-        return [{
+    def batch_list(state: str = "all", limit: int = 10) -> Dict[str, Any]:
+        all_jobs = list_jobs(base_dir, state=state)
+        capped = all_jobs[:limit]
+        return {"result": [{
             "job_id": j.job_id,
             "backend": j.backend,
             "state": j.state,
             "label": j.label,
             "created_at": j.created_at,
             "result_path": j.result_path,
-        } for j in list_jobs(base_dir, state=state)]
+        } for j in capped], "total": len(all_jobs), "showing": len(capped)}
 
     @mcp.tool()
     def batch_poll_once() -> Dict[str, Any]:
