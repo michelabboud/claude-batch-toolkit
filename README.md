@@ -1,8 +1,8 @@
 # claude-batch-toolkit
 
-Send non-urgent work to the Anthropic Batch API at **50% cost** — directly from Claude Code.
+Send non-urgent work to the Anthropic Batch API (or Vertex AI) at **50% cost** — directly from Claude Code.
 
-Code reviews, documentation, architecture analysis, refactoring plans, security audits — anything that can wait ~1 hour gets half-price processing with Claude Opus.
+Code reviews, documentation, architecture analysis, refactoring plans, security audits — anything that can wait ~1 hour gets half-price processing with Claude Opus. Works with the Anthropic API directly or through Google Cloud's Vertex AI.
 
 ## Install
 
@@ -336,12 +336,14 @@ uv run ~/.claude/mcp/claude_batch_mcp.py fetch msgbatch_xxx --print
 └─────────────────────────────────────────────────────────────────┘
 
                           │
-                          ▼
-              ┌──────────────────────┐
-              │  Anthropic Batch API │
-              │  (50% cost)          │
-              │  ~1hr turnaround     │
-              └──────────────────────┘
+                    ┌─────┴─────┐
+                    ▼           ▼
+        ┌──────────────────┐  ┌──────────────────────┐
+        │ Anthropic Batch  │  │ Vertex AI Batch      │
+        │ API (direct)     │  │ (via GCP)            │
+        │ 50% cost         │  │ 50% cost             │
+        │ ~1hr turnaround  │  │ ~1hr turnaround      │
+        └──────────────────┘  └──────────────────────┘
 ```
 
 ### Status Line + Cached Poller
@@ -384,12 +386,66 @@ Assistant message arrives
 
 ### Vertex AI (optional)
 
+Use Vertex AI as an alternative backend when you want batch processing through Google Cloud instead of the Anthropic API directly. Both backends offer the same 50% batch discount.
+
+#### Prerequisites
+
+1. A GCP project with the Vertex AI API enabled
+2. The `claude-opus-4-6` (or other Claude model) available in your region
+3. A GCS bucket in a supported region for batch input/output
+4. Application Default Credentials configured:
+
+```bash
+gcloud auth application-default login
+```
+
+#### Environment variables
+
 | Variable | Description |
 |----------|-------------|
 | `VERTEX_PROJECT` | GCP project ID |
-| `VERTEX_LOCATION` | e.g., `us-central1` |
-| `VERTEX_GCS_BUCKET` | GCS bucket for input/output |
-| `VERTEX_GCS_PREFIX` | Folder prefix (default: `claude-batch`) |
+| `VERTEX_LOCATION` | e.g., `us-central1` (must support Claude models) |
+| `VERTEX_GCS_BUCKET` | GCS bucket for input/output JSONL files |
+| `VERTEX_GCS_PREFIX` | Folder prefix in the bucket (default: `claude-batch`) |
+
+#### MCP config for Vertex
+
+When using Vertex, you don't need an `ANTHROPIC_API_KEY`. Configure `~/.claude.json` with your Vertex env vars instead:
+
+```json
+{
+  "mcpServers": {
+    "claude-batch": {
+      "command": "uv",
+      "args": ["run", "/Users/YOU/.claude/mcp/claude_batch_mcp.py", "--mcp"],
+      "env": {
+        "VERTEX_PROJECT": "my-gcp-project",
+        "VERTEX_LOCATION": "us-central1",
+        "VERTEX_GCS_BUCKET": "my-batch-bucket"
+      }
+    }
+  }
+}
+```
+
+You can also set both Anthropic and Vertex credentials to have both backends available.
+
+#### Backend auto-selection
+
+When `send_to_batch` is called with `backend: "auto"` (the default):
+- If `ANTHROPIC_API_KEY` is set, **Anthropic is used** (preferred — supports background status line polling)
+- Otherwise, if all three Vertex env vars are set (`VERTEX_PROJECT`, `VERTEX_LOCATION`, `VERTEX_GCS_BUCKET`), **Vertex is used**
+- You can force a specific backend by passing `backend: "anthropic"` or `backend: "vertex"`
+
+#### Why GCS (not BigQuery)?
+
+The Vertex Batch API supports both GCS and BigQuery for input/output. This toolkit uses GCS because it's simpler for single-prompt-at-a-time usage — no table schema, no extra infrastructure, just JSONL files in a bucket. BigQuery support is not implemented but contributions are welcome.
+
+#### Status line limitation
+
+The background status line poller (`statusline.sh`) only polls the Anthropic API. Vertex AI jobs are **not** polled in the background — their status updates when you run `/batch check` (which calls `batch_poll_once`). This is because Vertex polling requires Google auth credentials that the lightweight `curl`+`jq` statusline script can't handle.
+
+For more details, see the [Vertex AI Claude batch documentation](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/batch).
 
 ### File Locations
 
@@ -462,6 +518,22 @@ source ~/.claude/env
 curl -s -H "x-api-key: $ANTHROPIC_API_KEY" \
      -H "anthropic-version: 2023-06-01" \
      https://api.anthropic.com/v1/messages/batches/BATCH_ID
+```
+
+### "Vertex batch submit failed (403)" or auth errors
+
+```bash
+# Refresh application default credentials
+gcloud auth application-default login
+
+# Verify your project and location
+echo $VERTEX_PROJECT $VERTEX_LOCATION
+
+# Check that the GCS bucket exists and is accessible
+gcloud storage ls gs://$VERTEX_GCS_BUCKET/
+
+# Test Vertex API access
+gcloud ai batch-prediction-jobs list --project=$VERTEX_PROJECT --region=$VERTEX_LOCATION
 ```
 
 ### "Permission denied on env file"

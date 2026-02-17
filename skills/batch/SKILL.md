@@ -11,6 +11,17 @@ You have access to the `claude-batch` MCP server with these tools:
 - `batch_list` — list all tracked jobs
 - `batch_poll_once` — poll all pending jobs and auto-fetch completed ones
 
+## Backends
+
+The toolkit supports two batch backends:
+
+- **Anthropic** — direct Anthropic Message Batches API (requires `ANTHROPIC_API_KEY`)
+- **Vertex** — Google Cloud Vertex AI BatchPredictionJobs (requires `VERTEX_PROJECT`, `VERTEX_LOCATION`, `VERTEX_GCS_BUCKET`)
+
+`send_to_batch` accepts a `backend` parameter: `"auto"` (default), `"anthropic"`, or `"vertex"`. With `"auto"`, Anthropic is preferred when `ANTHROPIC_API_KEY` is set; otherwise Vertex is used. Both backends use the same model string (e.g., `claude-opus-4-6`).
+
+Vertex job IDs are long resource paths like `projects/my-project/locations/us-central1/batchPredictionJobs/123456789`, while Anthropic job IDs look like `msgbatch_abc123`.
+
 ## Pre-flight check
 
 **Always call `batch_list` first** before building any prompt. This:
@@ -101,7 +112,7 @@ PROMPT_EOF
 
 Call `send_to_batch` with:
 - `packet_path`: `/tmp/batch_prompt.md`
-- `backend`: `"anthropic"`
+- `backend`: `"auto"` (uses Vertex when configured, otherwise Anthropic — or force `"anthropic"` / `"vertex"`)
 - `label`: A descriptive label like `"security-review-auth"` or `"test-gen-services"`
 
 5. **Report to user** — Tell the user:
@@ -139,15 +150,16 @@ Keep prompts focused. If a task covers many files or multiple distinct concerns,
 
 When the user says "check", "status", "list", or asks about batch results:
 
-1. Call `batch_poll_once` to check for any newly completed jobs
+1. Call `batch_poll_once` to check for any newly completed jobs — this handles both Anthropic and Vertex backends. For Vertex jobs, this is the **only** way to poll (the statusline background poller only handles Anthropic jobs).
 2. Call `batch_list` to show all jobs with their states
 3. **Read results from disk** instead of calling `batch_fetch` — this saves tokens since `batch_fetch` returns the full text through MCP:
    - Job results live at `~/.claude/batches/results/<job_id>.md`
+   - For Vertex jobs, the job ID contains slashes so the filename uses underscores: e.g., `projects_my-project_locations_us-central1_batchPredictionJobs_123.md`
    - Read the file directly: `cat ~/.claude/batches/results/<job_id>.md`
    - This is especially important for large results
 4. Present the results to the user in a readable format
 
-**Status bar awareness**: The user's status bar already shows batch job counts (pending/done/failed). Don't repeat these counts — focus on presenting the actual results.
+**Status bar awareness**: The user's status bar shows batch job counts (pending/done/failed), but only for Anthropic jobs. Vertex jobs won't appear in the status bar — always use `batch_poll_once` to check them.
 
 ## Cost awareness
 

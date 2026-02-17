@@ -4,6 +4,8 @@
 # dependencies = [
 #     "mcp",
 #     "requests",
+#     "google-auth",
+#     "google-cloud-storage",
 # ]
 # ///
 """
@@ -292,7 +294,7 @@ class VertexBatchBackend:
     def _authorized_session(self):
         if self.session is None:
             creds, _ = self.google_auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
-            self.session = self.google_auth_transport.requests.AuthorizedSession(creds)
+            self.session = self.google_auth_transport.AuthorizedSession(creds)
         return self.session
 
     def _endpoint(self) -> str:
@@ -437,12 +439,12 @@ def choose_backend(requested: str) -> BackendName:
     req = requested.lower()
     if req in ("anthropic", "vertex"):
         return req  # type: ignore
-    has_vertex = bool(os.getenv("VERTEX_PROJECT") and os.getenv("VERTEX_LOCATION") and os.getenv("VERTEX_GCS_BUCKET"))
     has_anthropic = bool(os.getenv("ANTHROPIC_API_KEY"))
-    if has_vertex:
-        return "vertex"
+    has_vertex = bool(os.getenv("VERTEX_PROJECT") and os.getenv("VERTEX_LOCATION") and os.getenv("VERTEX_GCS_BUCKET"))
     if has_anthropic:
         return "anthropic"
+    if has_vertex:
+        return "vertex"
     raise RuntimeError("No backend creds found. Set VERTEX_PROJECT/VERTEX_LOCATION/VERTEX_GCS_BUCKET or ANTHROPIC_API_KEY.")
 
 
@@ -649,7 +651,12 @@ def poll_once(base_dir: str) -> List[str]:
             else:
                 state = st.get("state")
                 if state in ("JOB_STATE_SUCCEEDED", "JOB_STATE_FAILED", "JOB_STATE_CANCELLED", "JOB_STATE_PAUSED"):
-                    fetch_job(rec, base_dir, force=False)
+                    try:
+                        fetch_job(rec, base_dir, force=False)
+                    except Exception:
+                        # Cancelled/failed jobs may have no output — mark as failed locally
+                        rec.state = "failed"
+                        update_job(rec, base_dir)
                     completed.append(rec.job_id)
                     continue
                 rec.state = "running"
