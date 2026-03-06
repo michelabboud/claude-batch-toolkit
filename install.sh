@@ -120,7 +120,7 @@ fi
 ok "Dependencies found: uv, jq, curl"
 
 # Verify source files exist before planning anything
-for src_file in "mcp/claude_batch_mcp.py" "skills/batch/SKILL.md" "statusline.sh"; do
+for src_file in "mcp/claude_batch_mcp.py" "skills/batchy/SKILL.md" "statusline.sh"; do
     [[ -f "$SCRIPT_DIR/$src_file" ]] || die "Source file not found: $SCRIPT_DIR/$src_file"
 done
 
@@ -133,7 +133,7 @@ CHANGES=()
 WARNINGS=()
 
 # 1. Directories
-for d in "$CLAUDE_DIR/mcp" "$CLAUDE_DIR/skills/batch" "$RESULTS_DIR"; do
+for d in "$CLAUDE_DIR/mcp" "$CLAUDE_DIR/skills/batchy" "$RESULTS_DIR"; do
     if [[ ! -d "$d" ]]; then
         CHANGES+=("CREATE DIR  $d")
     fi
@@ -142,7 +142,7 @@ done
 # 2. File copies
 for pair in \
     "mcp/claude_batch_mcp.py:$CLAUDE_DIR/mcp/claude_batch_mcp.py" \
-    "skills/batch/SKILL.md:$CLAUDE_DIR/skills/batch/SKILL.md" \
+    "skills/batchy/SKILL.md:$CLAUDE_DIR/skills/batchy/SKILL.md" \
     "statusline.sh:$CLAUDE_DIR/statusline.sh"; do
     src="${pair%%:*}"
     dst="${pair##*:}"
@@ -253,17 +253,24 @@ atomic_json_write() {
 
 # ─── Create directory structure ─────────────────────────────────────────────────
 mkdir -p "$CLAUDE_DIR/mcp"
-mkdir -p "$CLAUDE_DIR/skills/batch"
+mkdir -p "$CLAUDE_DIR/skills/batchy"
 mkdir -p "$RESULTS_DIR"
 
 ok "Directory structure ready"
+
+# ─── Migrate old skill name (batch → batchy) ────────────────────────────────────
+if [[ -f "$CLAUDE_DIR/skills/batch/SKILL.md" ]]; then
+    rm -f "$CLAUDE_DIR/skills/batch/SKILL.md"
+    rmdir "$CLAUDE_DIR/skills/batch" 2>/dev/null || true
+    info "Migrated: removed old skills/batch/ (renamed to skills/batchy/)"
+fi
 
 # ─── Copy files ─────────────────────────────────────────────────────────────────
 cp "$SCRIPT_DIR/mcp/claude_batch_mcp.py" "$CLAUDE_DIR/mcp/claude_batch_mcp.py"
 ok "Installed mcp/claude_batch_mcp.py"
 
-cp "$SCRIPT_DIR/skills/batch/SKILL.md" "$CLAUDE_DIR/skills/batch/SKILL.md"
-ok "Installed skills/batch/SKILL.md"
+cp "$SCRIPT_DIR/skills/batchy/SKILL.md" "$CLAUDE_DIR/skills/batchy/SKILL.md"
+ok "Installed skills/batchy/SKILL.md"
 
 cp "$SCRIPT_DIR/statusline.sh" "$CLAUDE_DIR/statusline.sh"
 chmod +x "$CLAUDE_DIR/statusline.sh"
@@ -387,15 +394,15 @@ echo -e "${GREEN}${BOLD}Installation complete!${NC}"
 echo ""
 echo "What was installed:"
 echo "  • MCP server:   ~/.claude/mcp/claude_batch_mcp.py"
-echo "  • Skill file:   ~/.claude/skills/batch/SKILL.md"
+echo "  • Skill file:   ~/.claude/skills/batchy/SKILL.md"
 echo "  • Status line:  ~/.claude/statusline.sh"
 echo "  • API key:      ~/.claude/env"
 echo "  • Jobs dir:     ~/.claude/batches/"
 echo ""
 echo "Usage in Claude Code:"
-echo "  /batch Review this codebase for security issues"
-echo "  /batch check"
-echo "  /batch list"
+echo "  /batchy Review this codebase for security issues"
+echo "  /batchy check"
+echo "  /batchy list"
 echo ""
 echo "The status bar will show batch job counts automatically."
 echo ""

@@ -143,10 +143,15 @@ else
     CHANGES+=("NO CHANGE   $CLAUDE_DIR/mcp/claude_batch_mcp.py  (not found)")
 fi
 
-if [[ -f "$CLAUDE_DIR/skills/batch/SKILL.md" ]]; then
-    CHANGES+=("REMOVE      $CLAUDE_DIR/skills/batch/SKILL.md")
+if [[ -f "$CLAUDE_DIR/skills/batchy/SKILL.md" ]]; then
+    CHANGES+=("REMOVE      $CLAUDE_DIR/skills/batchy/SKILL.md")
 else
-    CHANGES+=("NO CHANGE   $CLAUDE_DIR/skills/batch/SKILL.md  (not found)")
+    CHANGES+=("NO CHANGE   $CLAUDE_DIR/skills/batchy/SKILL.md  (not found)")
+fi
+
+# Legacy skill path (pre-rename)
+if [[ -f "$CLAUDE_DIR/skills/batch/SKILL.md" ]]; then
+    CHANGES+=("REMOVE      $CLAUDE_DIR/skills/batch/SKILL.md  (legacy)")
 fi
 
 if [[ -f "$CLAUDE_DIR/statusline.sh" ]]; then
@@ -164,7 +169,7 @@ if [[ -f "$BATCHES_DIR/.poll.lock" ]]; then
 fi
 
 # 6. Empty directory cleanup (only if they would be empty)
-for d in "$CLAUDE_DIR/mcp" "$CLAUDE_DIR/skills/batch" "$CLAUDE_DIR/skills"; do
+for d in "$CLAUDE_DIR/mcp" "$CLAUDE_DIR/skills/batchy" "$CLAUDE_DIR/skills/batch" "$CLAUDE_DIR/skills"; do
     if [[ -d "$d" ]]; then
         CHANGES+=("RMDIR       $d  (only if empty after removal)")
     fi
@@ -310,9 +315,16 @@ if [[ -f "$CLAUDE_DIR/mcp/claude_batch_mcp.py" ]]; then
     REMOVED=$((REMOVED + 1))
 fi
 
+if [[ -f "$CLAUDE_DIR/skills/batchy/SKILL.md" ]]; then
+    rm -f "$CLAUDE_DIR/skills/batchy/SKILL.md"
+    ok "Removed $CLAUDE_DIR/skills/batchy/SKILL.md"
+    REMOVED=$((REMOVED + 1))
+fi
+
+# Legacy skill path (pre-rename)
 if [[ -f "$CLAUDE_DIR/skills/batch/SKILL.md" ]]; then
     rm -f "$CLAUDE_DIR/skills/batch/SKILL.md"
-    ok "Removed $CLAUDE_DIR/skills/batch/SKILL.md"
+    ok "Removed $CLAUDE_DIR/skills/batch/SKILL.md (legacy)"
     REMOVED=$((REMOVED + 1))
 fi
 
@@ -335,7 +347,8 @@ fi
 
 # ─── Clean up empty directories (rmdir only — safe for non-empty) ──────────────
 rmdir "$CLAUDE_DIR/mcp" 2>/dev/null && info "Removed empty directory $CLAUDE_DIR/mcp/" || true
-rmdir "$CLAUDE_DIR/skills/batch" 2>/dev/null && info "Removed empty directory $CLAUDE_DIR/skills/batch/" || true
+rmdir "$CLAUDE_DIR/skills/batchy" 2>/dev/null && info "Removed empty directory $CLAUDE_DIR/skills/batchy/" || true
+rmdir "$CLAUDE_DIR/skills/batch" 2>/dev/null && info "Removed empty directory $CLAUDE_DIR/skills/batch/ (legacy)" || true
 rmdir "$CLAUDE_DIR/skills" 2>/dev/null && info "Removed empty directory $CLAUDE_DIR/skills/" || true
 
 # ─── Handle data files ─────────────────────────────────────────────────────────
