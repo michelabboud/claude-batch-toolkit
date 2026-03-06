@@ -57,7 +57,7 @@ command -v curl && echo "curl ok" || echo "curl MISSING"
 
 ```bash
 mkdir -p ~/.claude/mcp
-mkdir -p ~/.claude/skills/batch
+mkdir -p ~/.claude/skills/batchy
 mkdir -p ~/.claude/batches/results
 ```
 
@@ -70,7 +70,7 @@ cp mcp/claude_batch_mcp.py ~/.claude/mcp/claude_batch_mcp.py
 #### Step 3: Install the skill file
 
 ```bash
-cp skills/batch/SKILL.md ~/.claude/skills/batch/SKILL.md
+cp skills/batchy/SKILL.md ~/.claude/skills/batchy/SKILL.md
 ```
 
 #### Step 4 *(optional)*: Install the statusline script
@@ -185,7 +185,7 @@ echo '{}' | bash ~/.claude/statusline.sh
 ```bash
 echo "=== File check ==="
 [ -f ~/.claude/mcp/claude_batch_mcp.py ] && echo "ok MCP server"     || echo "MISSING MCP server"
-[ -f ~/.claude/skills/batch/SKILL.md ]   && echo "ok Skill file"     || echo "MISSING Skill file"
+[ -f ~/.claude/skills/batchy/SKILL.md ]  && echo "ok Skill file"     || echo "MISSING Skill file"
 [ -f ~/.claude/statusline.sh ]           && echo "ok Statusline"     || echo "-- Statusline (optional)"
 [ -f ~/.claude/env ]                     && echo "ok Env file"       || echo "MISSING Env file"
 [ -f ~/.claude/batches/jobs.json ]       && echo "ok Jobs registry"  || echo "MISSING Jobs registry"
@@ -208,9 +208,9 @@ PERMS=$(stat -f '%A' ~/.claude/env 2>/dev/null || stat -c '%a' ~/.claude/env 2>/
 
 ```bash
 rm -f ~/.claude/mcp/claude_batch_mcp.py
-rm -f ~/.claude/skills/batch/SKILL.md
+rm -f ~/.claude/skills/batchy/SKILL.md
 rm -f ~/.claude/statusline.sh
-rmdir ~/.claude/skills/batch 2>/dev/null || true
+rmdir ~/.claude/skills/batchy 2>/dev/null || true
 rmdir ~/.claude/skills 2>/dev/null || true
 ```
 
@@ -250,6 +250,10 @@ rm -f ~/.claude/batches/.poll.lock
 
 </details>
 
+## Why `/batchy`?
+
+The skill was originally named `/batch`, but Claude Code introduced a built-in `/batch` command with different semantics ([#4](https://github.com/s2-streamstore/claude-batch-toolkit/issues/4)). To avoid the collision, we renamed to `/batchy`. Existing installs are migrated automatically when you re-run `./install.sh`.
+
 ## Usage
 
 ### Submit work to batch
@@ -257,15 +261,15 @@ rm -f ~/.claude/batches/.poll.lock
 In Claude Code, just say:
 
 ```
-/batch Review this codebase for security issues
+/batchy Review this codebase for security issues
 ```
 
 ```
-/batch Generate comprehensive tests for src/auth/
+/batchy Generate comprehensive tests for src/auth/
 ```
 
 ```
-/batch Write API documentation for all public endpoints
+/batchy Write API documentation for all public endpoints
 ```
 
 Claude will gather all relevant context, build a self-contained prompt, submit it to the Batch API, and tell you the job ID.
@@ -273,15 +277,15 @@ Claude will gather all relevant context, build a self-contained prompt, submit i
 ### Check results
 
 ```
-/batch check
+/batchy check
 ```
 
 ```
-/batch status
+/batchy status
 ```
 
 ```
-/batch list
+/batchy list
 ```
 
 Results appear in your status bar automatically. When a job completes, Claude reads the result from disk and presents it.
@@ -310,7 +314,7 @@ uv run ~/.claude/mcp/claude_batch_mcp.py fetch msgbatch_xxx --print
 ┌─────────────────────────────────────────────────────────────────┐
 │ Claude Code Session                                             │
 │                                                                 │
-│  User: "/batch review src/ for security issues"                 │
+│  User: "/batchy review src/ for security issues"                 │
 │                                                                 │
 │  Claude:                                                        │
 │    1. Reads all files in src/                                   │
@@ -330,7 +334,7 @@ uv run ~/.claude/mcp/claude_batch_mcp.py fetch msgbatch_xxx --print
 │  │ [Opus] 42% | $1.23 | batch: 1 done                     │    │
 │  └─────────────────────────────────────────────────────────┘    │
 │                                                                 │
-│  User: "/batch check"                                           │
+│  User: "/batchy check"                                           │
 │  Claude: reads ~/.claude/batches/results/msgbatch_abc123.md     │
 │          presents formatted results                             │
 └─────────────────────────────────────────────────────────────────┘
@@ -443,7 +447,7 @@ The Vertex Batch API supports both GCS and BigQuery for input/output. This toolk
 
 #### Status line limitation
 
-The background status line poller (`statusline.sh`) only polls the Anthropic API. Vertex AI jobs are **not** polled in the background — their status updates when you run `/batch check` (which calls `batch_poll_once`). This is because Vertex polling requires Google auth credentials that the lightweight `curl`+`jq` statusline script can't handle.
+The background status line poller (`statusline.sh`) only polls the Anthropic API. Vertex AI jobs are **not** polled in the background — their status updates when you run `/batchy check` (which calls `batch_poll_once`). This is because Vertex polling requires Google auth credentials that the lightweight `curl`+`jq` statusline script can't handle.
 
 For more details, see the [Vertex AI Claude batch documentation](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/batch).
 
@@ -456,7 +460,7 @@ For more details, see the [Vertex AI Claude batch documentation](https://docs.cl
 ├── mcp/
 │   └── claude_batch_mcp.py      # MCP server
 ├── skills/
-│   └── batch/
+│   └── batchy/
 │       └── SKILL.md             # Skill definition
 ├── statusline.sh                # Status bar + cached poller
 └── batches/
@@ -545,7 +549,7 @@ chmod 600 ~/.claude/env
 ## Architecture
 
 - **MCP Server** (`claude_batch_mcp.py`): Python script run by `uv`. Exposes `send_to_batch`, `batch_status`, `batch_fetch`, `batch_list`, `batch_poll_once` tools. Also works as a CLI.
-- **Skill** (`SKILL.md`): Teaches Claude Code how and when to use the batch tools. Loaded automatically.
+- **Skill** (`SKILL.md`): Teaches Claude Code how and when to use the batch tools. Invoked with `/batchy`. Loaded automatically.
 - **Status Line** (`statusline.sh`): Bash script that renders batch job counts in the Claude Code status bar and triggers background polling via `curl`+`jq`.
 - **Jobs Registry** (`jobs.json`): JSON file tracking all submitted batch jobs, their states, and result paths.
 

@@ -1,6 +1,6 @@
 ---
-name: batch
-description: Send non-urgent tasks to Claude's Batch API at 50% off. Use for code reviews, documentation, analysis, refactoring plans, or any work that can wait ~1hr. Trigger with "/batch", "batch this", or "send to batch".
+name: batchy
+description: Send non-urgent tasks to Claude's Batch API at 50% off. Use for code reviews, documentation, analysis, refactoring plans, or any work that can wait ~1hr. Trigger with "/batchy", "batch this", or "send to batch".
 argument-hint: [task description or "check"/"status"/"list"]
 ---
 
@@ -119,7 +119,7 @@ Call `send_to_batch` with:
    - The job ID
    - Results typically arrive within 1 hour
    - Their status bar will show when it completes
-   - They can check with `/batch check`
+   - They can check with `/batchy check`
 
 ### Prompt template structure
 
